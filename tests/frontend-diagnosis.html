@@ -1,0 +1,148 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Frontend Response Handling Test</title>
+    <script src="https://cdn.tailwindcss.com"></script>
+</head>
+<body class="bg-gray-900 text-white p-8">
+
+<h1 class="text-3xl font-bold mb-4">Frontend Response Handling Diagnostic</h1>
+<p class="text-gray-400 mb-8">This test validates that the frontend can correctly process the N8N response format.</p>
+
+<div class="space-y-4">
+    <button id="test-valid-response" class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-4 rounded">
+        Test Valid Array Response
+    </button>
+    
+    <button id="test-object-response" class="bg-green-600 hover:bg-green-700 text-white font-bold py-2 px-4 rounded">
+        Test Single Object Response
+    </button>
+    
+    <button id="test-error-response" class="bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-4 rounded">
+        Test Error Response
+    </button>
+</div>
+
+<div id="results" class="mt-8 p-4 bg-gray-800 rounded-lg min-h-[200px]"></div>
+
+<script>
+// Mock the exact response format you mentioned
+const MOCK_VALID_ARRAY_RESPONSE = [
+    {
+        "success": true,
+        "imageUrls": [
+            "https://example.com/image1.jpg",
+            "https://example.com/image2.jpg",
+            "https://example.com/image3.jpg"
+        ],
+        "totalImages": 3,
+        "timestamp": "2025-08-22T05:41:49.956Z"
+    }
+];
+
+const MOCK_OBJECT_RESPONSE = {
+    "success": true,
+    "imageUrls": [
+        "https://example.com/image1.jpg",
+        "https://example.com/image2.jpg"
+    ],
+    "totalImages": 2,
+    "timestamp": "2025-08-22T05:41:49.956Z"
+};
+
+const MOCK_ERROR_RESPONSE = {
+    "success": false,
+    "error": "Something went wrong"
+};
+
+function logResult(test, result) {
+    const resultsDiv = document.getElementById('results');
+    const timestamp = new Date().toLocaleTimeString();
+    resultsDiv.innerHTML += `
+        <div class="border-l-4 border-blue-500 pl-4 mb-4">
+            <p class="font-bold text-blue-400">[${timestamp}] ${test}</p>
+            <pre class="text-gray-300 text-sm mt-2">${JSON.stringify(result, null, 2)}</pre>
+        </div>
+    `;
+}
+
+// Copy the exact frontend logic from the main app
+async function processResponse(mockData, testName) {
+    try {
+        // Simulate the fetch response processing
+        const result = mockData;
+        
+        logResult(`${testName} - Raw Result`, result);
+
+        // Handle response format - check if it's an array and extract first element
+        const data = Array.isArray(result) ? result[0] : result;
+        
+        logResult(`${testName} - Extracted Data`, data);
+        
+        // Handle new response format with success field
+        if (!data.success) {
+            throw new Error(data.error || 'The scraping service reported a failure.');
+        }
+
+        // Validate the new response structure
+        if (!data.imageUrls || !Array.isArray(data.imageUrls)) {
+            throw new Error('Invalid response format: imageUrls array not found.');
+        }
+        
+        const allImages = data.imageUrls.map((url, index) => ({
+            imgUrl: url,
+            index: index + 1
+        }));
+
+        logResult(`${testName} - Processed Images`, {
+            imageCount: allImages.length,
+            totalImages: data.totalImages,
+            timestamp: data.timestamp,
+            firstImage: allImages[0]
+        });
+
+        logResult(`${testName} - SUCCESS`, {
+            message: "Response processed successfully",
+            imageCount: allImages.length
+        });
+
+    } catch (err) {
+        logResult(`${testName} - ERROR`, {
+            error: err.message,
+            stack: err.stack
+        });
+    }
+}
+
+document.getElementById('test-valid-response').addEventListener('click', () => {
+    processResponse(MOCK_VALID_ARRAY_RESPONSE, 'Valid Array Response');
+});
+
+document.getElementById('test-object-response').addEventListener('click', () => {
+    processResponse(MOCK_OBJECT_RESPONSE, 'Single Object Response');
+});
+
+document.getElementById('test-error-response').addEventListener('click', () => {
+    processResponse(MOCK_ERROR_RESPONSE, 'Error Response');
+});
+
+// Auto-run all tests on page load
+window.addEventListener('load', () => {
+    setTimeout(() => {
+        document.getElementById('test-valid-response').click();
+    }, 500);
+    
+    setTimeout(() => {
+        document.getElementById('test-object-response').click();
+    }, 1000);
+    
+    setTimeout(() => {
+        document.getElementById('test-error-response').click();
+    }, 1500);
+});
+</script>
+
+</body>
+</html>

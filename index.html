@@ -1,0 +1,350 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Instagram Scraper</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="alternate icon" href="/favicon.ico">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        * { transition: all 0.2s ease-in-out; }
+        .image-card.selected { ring: 4px; ring-color: #3b82f6; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+
+    <div class="max-w-6xl mx-auto p-4 sm:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold mb-2">Instagram Profile Scraper</h1>
+            <p class="text-gray-400">Enter a profile URL to fetch and download images.</p>
+        </header>
+
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
+            <div class="flex flex-col gap-4">
+                <input id="url-input" type="text" placeholder="https://www.instagram.com/username"
+                    class="bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <input id="session-cookie-input" type="text" placeholder="Instagram session cookie (optional - improves results)"
+                        class="flex-grow bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                    <button id="scrape-button"
+                        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md flex items-center justify-center">
+                        Scrape Images
+                    </button>
+                </div>
+                <p class="text-gray-400 text-xs">
+                    💡 Tip: Adding your Instagram session cookie can improve scraping results and bypass some rate limits.
+                </p>
+            </div>
+        </div>
+
+        <div id="message-container"></div>
+
+        <div id="results-controls" class="hidden">
+            <div class="flex justify-between items-center mb-4 bg-gray-800 p-4 rounded-lg">
+                <div class="flex items-center gap-3">
+                    <input id="select-all-checkbox" type="checkbox"
+                        class="h-6 w-6 rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500" />
+                    <label id="selection-label">Select All</label>
+                </div>
+                <button id="download-button"
+                    class="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md">
+                    Download Selected
+                </button>
+            </div>
+        </div>
+
+        <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+    </div>
+
+    <script>
+        // --- Configuration ---
+        // Using proxy endpoint - no environment variables needed in frontend
+
+        // --- State Management ---
+        let allImages = [];
+        let selectedImages = new Set();
+        let isLoading = false;
+        let isDownloading = false;
+
+        // --- DOM Elements ---
+        const urlInput = document.getElementById('url-input');
+        const sessionCookieInput = document.getElementById('session-cookie-input');
+        const scrapeButton = document.getElementById('scrape-button');
+        const messageContainer = document.getElementById('message-container');
+        const resultsControls = document.getElementById('results-controls');
+        const imageGrid = document.getElementById('image-grid');
+        const selectAllCheckbox = document.getElementById('select-all-checkbox');
+        const selectionLabel = document.getElementById('selection-label');
+        const downloadButton = document.getElementById('download-button');
+
+        // --- Helper Functions ---
+        const showMessage = (text, type = 'error') => {
+            let color, bgColor, borderColor, textColor;
+            
+            switch(type) {
+                case 'success':
+                    color = 'green';
+                    bgColor = 'bg-green-500/20';
+                    borderColor = 'border-green-500';
+                    textColor = 'text-green-300';
+                    break;
+                case 'info':
+                    color = 'blue';
+                    bgColor = 'bg-blue-500/20';
+                    borderColor = 'border-blue-500';
+                    textColor = 'text-blue-300';
+                    break;
+                default: // error
+                    color = 'red';
+                    bgColor = 'bg-red-500/20';
+                    borderColor = 'border-red-500';
+                    textColor = 'text-red-300';
+            }
+            
+            messageContainer.innerHTML = `
+                <div class="${bgColor} ${borderColor} ${textColor} px-4 py-3 rounded-lg mb-8 text-center">
+                    <p>${text}</p>
+                </div>`;
+        };
+
+        const setLoading = (loading) => {
+            isLoading = loading;
+            scrapeButton.disabled = loading;
+            scrapeButton.innerHTML = loading ?
+                `<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>` :
+                'Scrape Images';
+        };
+
+        const setDownloading = (downloading) => {
+            isDownloading = downloading;
+            downloadButton.disabled = downloading;
+            downloadButton.textContent = downloading ? 'Zipping...' : 'Download Selected';
+        }
+
+        const updateSelectionUI = () => {
+            selectionLabel.textContent = `Select All (${selectedImages.size} / ${allImages.length})`;
+            selectAllCheckbox.checked = allImages.length > 0 && selectedImages.size === allImages.length;
+            document.querySelectorAll('.image-card').forEach(card => {
+                const checkbox = card.querySelector('input[type="checkbox"]');
+                if (selectedImages.has(card.dataset.src)) {
+                    card.classList.add('ring-4', 'ring-blue-500');
+                    checkbox.checked = true;
+                } else {
+                    card.classList.remove('ring-4', 'ring-blue-500');
+                    checkbox.checked = false;
+                }
+            });
+        };
+
+        // --- Core Logic ---
+        scrapeButton.addEventListener('click', async () => {
+            const url = urlInput.value;
+            if (!url || !url.includes('instagram.com')) {
+                showMessage('Please enter a valid Instagram URL.');
+                return;
+            }
+            // No environment variable validation needed - using proxy endpoint
+
+            setLoading(true);
+            messageContainer.innerHTML = '';
+            imageGrid.innerHTML = '';
+            resultsControls.classList.add('hidden');
+            allImages = [];
+            selectedImages.clear();
+
+            // Get session cookie from input field
+            const sessionCookie = sessionCookieInput.value.trim();
+            
+            // Construct the payload for the proxy endpoint
+            const payload = {
+                url: url,
+                csvName: "instagram_scrape_results",
+                numberOfPostsPerProfile: 100,
+                numberOfProfilesPerLaunch: 1,
+                sessionCookie: sessionCookie || ""
+            };
+
+            // Declare startTime outside try block to fix scope issue
+            let startTime = performance.now();
+
+            try {
+                // === COMPREHENSIVE LOGGING FOR DEBUGGING ===
+                console.log('🚀 Starting webhook request at:', new Date().toISOString());
+                console.log('📍 Proxy URL:', '/api/webhook/instagram-scraper');
+                console.log('📦 Payload:', JSON.stringify(payload, null, 2));
+                
+                startTime = performance.now(); // Reset for accurate timing
+                console.log('⏱️ Request start time (performance):', startTime);
+                
+                // Use proxy endpoint to avoid CORS issues
+                const response = await fetch('/api/webhook/instagram-scraper', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload),
+                });
+                
+                const fetchTime = performance.now();
+                console.log('📡 Response received after:', (fetchTime - startTime).toFixed(2), 'ms');
+                console.log('📊 Response status:', response.status);
+                console.log('✅ Response ok:', response.ok);
+                console.log('🏷️ Response status text:', response.statusText);
+                
+                // Log response headers
+                const headers = {};
+                for (const [key, value] of response.headers.entries()) {
+                    headers[key] = value;
+                }
+                console.log('📋 Response headers:', headers);
+                
+                // Get response text and log size
+                const responseText = await response.text();
+                const textTime = performance.now();
+                console.log('📄 Response body received after:', (textTime - startTime).toFixed(2), 'ms');
+                console.log('📏 Response body length:', responseText.length);
+                console.log('🔍 Response body preview (first 500 chars):', responseText.substring(0, 500));
+                
+                // Parse JSON
+                let result;
+                try {
+                    result = JSON.parse(responseText);
+                    const parseTime = performance.now();
+                    console.log('✅ JSON parsed successfully after:', (parseTime - startTime).toFixed(2), 'ms');
+                    console.log('🎯 Parsed result structure:', Object.keys(result).join(', '));
+                    if (Array.isArray(result)) {
+                        console.log('📋 Result is array with length:', result.length);
+                        if (result.length > 0) {
+                            console.log('🔍 First array element keys:', Object.keys(result[0]).join(', '));
+                        }
+                    }
+                } catch (parseError) {
+                    console.error('❌ JSON parsing failed:', parseError);
+                    console.error('🔍 Raw response text:', responseText);
+                    throw new Error(`JSON parsing failed: ${parseError.message}. Raw response: ${responseText.substring(0, 200)}`);
+                }
+
+                if (!response.ok) {
+                    console.error('❌ HTTP error response:', response.status, response.statusText);
+                    throw new Error(result.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                // Handle response format - check if it's an array and extract first element
+                const data = Array.isArray(result) ? result[0] : result;
+                
+                // Handle new response format with success field
+                if (!data.success) {
+                    throw new Error(data.error || 'The scraping service reported a failure.');
+                }
+
+                // Validate the new response structure
+                if (!data.imageUrls || !Array.isArray(data.imageUrls)) {
+                    throw new Error('Invalid response format: imageUrls array not found.');
+                }
+                
+                allImages = data.imageUrls.map((url, index) => ({
+                    imgUrl: url,
+                    index: index + 1
+                }));
+
+                if (allImages.length > 0) {
+                    resultsControls.classList.remove('hidden');
+                    
+                    // Display scraping results summary
+                    const summaryMessage = `Found ${allImages.length} images${data.totalImages ? ` (total: ${data.totalImages})` : ''}${data.timestamp ? ` - scraped at ${new Date(data.timestamp).toLocaleString()}` : ''}`;
+                    showMessage(summaryMessage, 'success');
+                    
+                    allImages.forEach((img, index) => {
+                        const card = document.createElement('div');
+                        card.className = 'image-card relative group bg-gray-900 rounded-lg overflow-hidden shadow-lg cursor-pointer';
+                        card.dataset.src = img.imgUrl;
+                        card.innerHTML = `
+                            <img src="${img.imgUrl}" alt="Scraped content ${index + 1}" class="w-full h-full object-cover transition-transform duration-300 group-hover:opacity-50"/>
+                            <div class="absolute top-2 right-2">
+                                <input type="checkbox" class="h-6 w-6 rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-blue-500 pointer-events-none"/>
+                            </div>`;
+                        card.addEventListener('click', () => {
+                            if (selectedImages.has(img.imgUrl)) {
+                                selectedImages.delete(img.imgUrl);
+                            } else {
+                                selectedImages.add(img.imgUrl);
+                            }
+                            updateSelectionUI();
+                        });
+                        imageGrid.appendChild(card);
+                    });
+                    updateSelectionUI();
+                } else {
+                    showMessage('Scraping was successful, but no images were found.');
+                }
+
+            } catch (err) {
+                // === ENHANCED ERROR LOGGING ===
+                const errorTime = performance.now();
+                console.error('❌ Request failed after:', (errorTime - startTime).toFixed(2), 'ms');
+                console.error('🚨 Error type:', err.constructor.name);
+                console.error('📝 Error message:', err.message);
+                console.error('🔍 Error stack:', err.stack);
+                
+                // Check if it's a network error vs HTTP error
+                if (err.name === 'TypeError' && err.message.includes('fetch')) {
+                    console.error('🌐 Network error detected - possible causes:');
+                    console.error('   • CORS policy blocking request');
+                    console.error('   • Network connectivity issue'); 
+                    console.error('   • Invalid URL or unreachable endpoint');
+                    console.error('   • Request timeout');
+                }
+                
+                showMessage(err.message);
+                console.error("🏁 Scraping process failed:", err);
+            } finally {
+                const totalTime = performance.now();
+                console.log('🏁 Total operation time:', (totalTime - startTime).toFixed(2), 'ms');
+                console.log('⏰ Request completed at:', new Date().toISOString());
+                setLoading(false);
+            }
+        });
+
+        selectAllCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                selectedImages = new Set(allImages.map(img => img.imgUrl));
+            } else {
+                selectedImages.clear();
+            }
+            updateSelectionUI();
+        });
+
+        downloadButton.addEventListener('click', async () => {
+            if (selectedImages.size === 0) {
+                showMessage("Please select at least one image to download.");
+                return;
+            }
+            setDownloading(true);
+
+            const zip = new JSZip();
+            const promises = Array.from(selectedImages).map(async (src, index) => {
+                try {
+                    const response = await fetch(src);
+                    const blob = await response.blob();
+                    zip.file(`instagram_image_${index + 1}.jpg`, blob);
+                } catch (err) {
+                    console.error(`Failed to download ${src}`, err);
+                }
+            });
+
+            await Promise.all(promises);
+
+            zip.generateAsync({ type: "blob" }).then(content => {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = 'instagram_images.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setDownloading(false);
+            });
+        });
+    </script>
+</body>
+</html>
+
