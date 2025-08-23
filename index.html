@@ -203,12 +203,18 @@
                 startTime = performance.now(); // Reset for accurate timing
                 console.log('⏱️ Request start time (performance):', startTime);
                 
-                // Direct call to N8N webhook
+                // Direct call to N8N webhook with extended timeout
+                const controller = new AbortController();
+                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes timeout
+                
                 const response = await fetch(N8N_WEBHOOK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
+                    signal: controller.signal
                 });
+                
+                clearTimeout(timeoutId);
                 
                 const fetchTime = performance.now();
                 console.log('📡 Response received after:', (fetchTime - startTime).toFixed(2), 'ms');
