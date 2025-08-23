@@ -60,7 +60,10 @@
 
     <script>
         // --- Configuration ---
-        // Using proxy endpoint - no environment variables needed in frontend
+        // Environment variables substituted at container startup
+        const N8N_WEBHOOK_URL = '$N8N_WEBHOOK_URL';
+        const PHANTOM_API_KEY = '$PHANTOMBUSTER_API_KEY';
+        const AGENT_ID = '$AGENT_ID';
 
         // --- State Management ---
         let allImages = [];
@@ -145,7 +148,27 @@
                 showMessage('Please enter a valid Instagram URL.');
                 return;
             }
-            // No environment variable validation needed - using proxy endpoint
+            // Check if environment variables are properly substituted
+            if (N8N_WEBHOOK_URL.startsWith('$') || PHANTOM_API_KEY.startsWith('$') || AGENT_ID.startsWith('$')) {
+                showMessage('App configuration is missing. Please check your .env file and rebuild the container.');
+                return;
+            }
+            
+            // Validate that we have proper values
+            if (!N8N_WEBHOOK_URL.startsWith('http')) {
+                showMessage('N8N webhook URL is not configured properly. Please check your .env file.');
+                return;
+            }
+            
+            if (!PHANTOM_API_KEY || PHANTOM_API_KEY.trim() === '') {
+                showMessage('PhantomBuster API key is not configured. Please check your .env file.');
+                return;
+            }
+            
+            if (!AGENT_ID || AGENT_ID.trim() === '') {
+                showMessage('Agent ID is not configured. Please check your .env file.');
+                return;
+            }
 
             setLoading(true);
             messageContainer.innerHTML = '';
@@ -157,9 +180,11 @@
             // Get session cookie from input field
             const sessionCookie = sessionCookieInput.value.trim();
             
-            // Construct the payload for the proxy endpoint
+            // Construct the payload for N8N webhook
             const payload = {
                 url: url,
+                phantomApiKey: PHANTOM_API_KEY,
+                agentId: AGENT_ID,
                 csvName: "instagram_scrape_results",
                 numberOfPostsPerProfile: 100,
                 numberOfProfilesPerLaunch: 1,
@@ -172,14 +197,14 @@
             try {
                 // === COMPREHENSIVE LOGGING FOR DEBUGGING ===
                 console.log('🚀 Starting webhook request at:', new Date().toISOString());
-                console.log('📍 Proxy URL:', '/api/webhook/instagram-scraper');
+                console.log('📍 N8N URL:', N8N_WEBHOOK_URL);
                 console.log('📦 Payload:', JSON.stringify(payload, null, 2));
                 
                 startTime = performance.now(); // Reset for accurate timing
                 console.log('⏱️ Request start time (performance):', startTime);
                 
-                // Use proxy endpoint to avoid CORS issues
-                const response = await fetch('/api/webhook/instagram-scraper', {
+                // Direct call to N8N webhook
+                const response = await fetch(N8N_WEBHOOK_URL, {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
                     body: JSON.stringify(payload),
