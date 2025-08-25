@@ -1,14 +1,25 @@
-FROM nginx:alpine
+FROM node:18-alpine
 
-# Copy the HTML and favicon files
-COPY index.html /usr/share/nginx/html/
-COPY favicon.svg /usr/share/nginx/html/
+# Set working directory
+WORKDIR /app
 
-# Fix favicon permissions for nginx
-RUN chmod 644 /usr/share/nginx/html/favicon.svg
+# Copy package files first (for better Docker layer caching)
+COPY package*.json ./
 
-# Copy environment substitution script
-COPY substitute-env.sh /docker-entrypoint.d/substitute-env.sh
-RUN chmod +x /docker-entrypoint.d/substitute-env.sh
+# Install dependencies (sqlite3, uuid, etc.)
+RUN npm install
 
-EXPOSE 80
+# Copy application files
+COPY . .
+
+# Fix favicon permissions
+RUN chmod 644 favicon.svg
+
+# Create directory for SQLite database
+RUN mkdir -p /app/data
+
+# Expose port 3000 (Node.js proxy server)
+EXPOSE 3000
+
+# Start the Node.js proxy server
+CMD ["npm", "start"]

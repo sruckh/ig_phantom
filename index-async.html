@@ -1,0 +1,400 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Instagram Scraper (Async)</title>
+    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
+    <link rel="alternate icon" href="/favicon.ico">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+    <style>
+        * { transition: all 0.2s ease-in-out; }
+        .image-card.selected { ring: 4px; ring-color: #3b82f6; }
+    </style>
+</head>
+<body class="bg-gray-900 text-white">
+
+    <div class="max-w-6xl mx-auto p-4 sm:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold mb-2">Instagram Profile Scraper</h1>
+            <p class="text-gray-400">Enter a profile URL to fetch and download images (Async Version).</p>
+        </header>
+
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
+            <div class="flex flex-col gap-4">
+                <input id="url-input" type="text" placeholder="https://www.instagram.com/username"
+                    class="bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <input id="session-cookie-input" type="text" placeholder="Instagram session cookie (optional - improves results)"
+                        class="flex-grow bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                    <button id="scrape-button"
+                        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md flex items-center justify-center">
+                        Start Scraping
+                    </button>
+                </div>
+                <p class="text-gray-400 text-xs">
+                    💡 Tip: Adding your Instagram session cookie can improve scraping results and bypass some rate limits.
+                </p>
+            </div>
+        </div>
+
+        <div id="message-container"></div>
+
+        <div id="results-controls" class="hidden">
+            <div class="flex justify-between items-center mb-4 bg-gray-800 p-4 rounded-lg">
+                <div class="flex items-center gap-3">
+                    <input id="select-all-checkbox" type="checkbox"
+                        class="h-6 w-6 rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500" />
+                    <label id="selection-label">Select All</label>
+                </div>
+                <button id="download-button"
+                    class="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md">
+                    Download Selected
+                </button>
+            </div>
+        </div>
+
+        <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+    </div>
+
+    <script>
+        // =============================================================================
+        // ASYNC FRONTEND IMPLEMENTATION
+        // =============================================================================
+        
+        // --- State Management ---
+        let allImages = [];
+        let selectedImages = new Set();
+        let currentJobId = null;
+        let pollingInterval = null;
+
+        // --- DOM Elements ---
+        const urlInput = document.getElementById('url-input');
+        const sessionCookieInput = document.getElementById('session-cookie-input');
+        const scrapeButton = document.getElementById('scrape-button');
+        const messageContainer = document.getElementById('message-container');
+        const resultsControls = document.getElementById('results-controls');
+        const imageGrid = document.getElementById('image-grid');
+        const selectAllCheckbox = document.getElementById('select-all-checkbox');
+        const selectionLabel = document.getElementById('selection-label');
+        const downloadButton = document.getElementById('download-button');
+
+        // --- Helper Functions ---
+        const showMessage = (text, type = 'error') => {
+            let bgColor, borderColor, textColor;
+            
+            switch(type) {
+                case 'success':
+                    bgColor = 'bg-green-500/20';
+                    borderColor = 'border-green-500';
+                    textColor = 'text-green-300';
+                    break;
+                case 'info':
+                    bgColor = 'bg-blue-500/20';
+                    borderColor = 'border-blue-500';
+                    textColor = 'text-blue-300';
+                    break;
+                case 'warning':
+                    bgColor = 'bg-yellow-500/20';
+                    borderColor = 'border-yellow-500';
+                    textColor = 'text-yellow-300';
+                    break;
+                default: // error
+                    bgColor = 'bg-red-500/20';
+                    borderColor = 'border-red-500';
+                    textColor = 'text-red-300';
+            }
+            
+            messageContainer.innerHTML = `
+                <div class="${bgColor} ${borderColor} ${textColor} px-4 py-3 rounded-lg mb-8 text-center">
+                    <p>${text}</p>
+                </div>`;
+        };
+
+        const setButtonState = (state) => {
+            switch(state) {
+                case 'start':
+                    scrapeButton.disabled = false;
+                    scrapeButton.innerHTML = 'Start Scraping';
+                    break;
+                case 'starting':
+                    scrapeButton.disabled = true;
+                    scrapeButton.innerHTML = `<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>`;
+                    break;
+                case 'processing':
+                    scrapeButton.disabled = true;
+                    scrapeButton.innerHTML = 'Processing... (check progress)';
+                    break;
+                case 'checking':
+                    scrapeButton.disabled = true;
+                    scrapeButton.innerHTML = 'Checking Results...';
+                    break;
+            }
+        };
+
+        const setDownloading = (downloading) => {
+            downloadButton.disabled = downloading;
+            downloadButton.textContent = downloading ? 'Zipping...' : 'Download Selected';
+        };
+
+        const updateSelectionUI = () => {
+            selectionLabel.textContent = `Select All (${selectedImages.size} / ${allImages.length})`;
+            selectAllCheckbox.checked = allImages.length > 0 && selectedImages.size === allImages.length;
+            document.querySelectorAll('.image-card').forEach(card => {
+                const checkbox = card.querySelector('input[type="checkbox"]');
+                if (selectedImages.has(card.dataset.src)) {
+                    card.classList.add('ring-4', 'ring-blue-500');
+                    checkbox.checked = true;
+                } else {
+                    card.classList.remove('ring-4', 'ring-blue-500');
+                    checkbox.checked = false;
+                }
+            });
+        };
+
+        const displayImages = (imageUrls, metadata = {}) => {
+            allImages = imageUrls.map((url, index) => ({
+                imgUrl: url,
+                index: index + 1
+            }));
+
+            if (allImages.length > 0) {
+                resultsControls.classList.remove('hidden');
+                
+                // Display scraping results summary
+                const summaryMessage = `Found ${allImages.length} images${metadata.totalImages ? ` (total: ${metadata.totalImages})` : ''}${metadata.timestamp ? ` - scraped at ${new Date(metadata.timestamp).toLocaleString()}` : ''}`;
+                showMessage(summaryMessage, 'success');
+                
+                allImages.forEach((img, index) => {
+                    const card = document.createElement('div');
+                    card.className = 'image-card relative group bg-gray-900 rounded-lg overflow-hidden shadow-lg cursor-pointer';
+                    card.dataset.src = img.imgUrl;
+                    card.innerHTML = `
+                        <img src="${img.imgUrl}" alt="Scraped content ${index + 1}" class="w-full h-full object-cover transition-transform duration-300 group-hover:opacity-50"/>
+                        <div class="absolute top-2 right-2">
+                            <input type="checkbox" class="h-6 w-6 rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-blue-500 pointer-events-none"/>
+                        </div>`;
+                    card.addEventListener('click', () => {
+                        if (selectedImages.has(img.imgUrl)) {
+                            selectedImages.delete(img.imgUrl);
+                        } else {
+                            selectedImages.add(img.imgUrl);
+                        }
+                        updateSelectionUI();
+                    });
+                    imageGrid.appendChild(card);
+                });
+                updateSelectionUI();
+            } else {
+                showMessage('Scraping was successful, but no images were found.');
+            }
+        };
+
+        // =============================================================================
+        // ASYNC API FUNCTIONS
+        // =============================================================================
+
+        const startScrapeJob = async (url, sessionCookie) => {
+            console.log('🚀 Starting async scrape job');
+            
+            const response = await fetch('/api/start-scrape', {
+                method: 'POST',
+                headers: { 'Content-Type': 'application/json' },
+                body: JSON.stringify({
+                    url: url,
+                    sessionCookie: sessionCookie
+                })
+            });
+
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log('✅ Job started:', result);
+            return result;
+        };
+
+        const checkJobStatus = async (jobId) => {
+            const response = await fetch(`/api/job-status/${jobId}`);
+            
+            if (!response.ok) {
+                const errorData = await response.json();
+                throw new Error(errorData.error || `HTTP ${response.status}`);
+            }
+
+            const result = await response.json();
+            console.log('📊 Job status:', result);
+            return result;
+        };
+
+        const pollForCompletion = async (jobId) => {
+            console.log('🔍 Starting to poll for job completion:', jobId);
+            let attempts = 0;
+            const maxAttempts = 40; // 40 * 5 seconds = 3 minutes max
+            
+            return new Promise((resolve, reject) => {
+                const poll = async () => {
+                    attempts++;
+                    
+                    try {
+                        setButtonState('checking');
+                        const status = await checkJobStatus(jobId);
+                        
+                        if (status.status === 'completed') {
+                            console.log('✅ Job completed successfully');
+                            clearInterval(pollingInterval);
+                            resolve(status);
+                            return;
+                        }
+                        
+                        if (status.status === 'failed') {
+                            console.log('❌ Job failed:', status.error);
+                            clearInterval(pollingInterval);
+                            reject(new Error(status.error || 'Job failed'));
+                            return;
+                        }
+                        
+                        if (status.status === 'processing') {
+                            console.log(`⏳ Job still processing... (attempt ${attempts}/${maxAttempts})`);
+                            showMessage(`Scraping in progress... (${attempts * 5}s elapsed)`, 'info');
+                            setButtonState('processing');
+                            
+                            if (attempts >= maxAttempts) {
+                                clearInterval(pollingInterval);
+                                reject(new Error('Job timed out - exceeded maximum polling time'));
+                                return;
+                            }
+                        }
+                        
+                    } catch (error) {
+                        console.error('❌ Polling error:', error);
+                        clearInterval(pollingInterval);
+                        reject(error);
+                    }
+                };
+                
+                // Poll immediately, then every 5 seconds
+                poll();
+                pollingInterval = setInterval(poll, 5000);
+            });
+        };
+
+        // =============================================================================
+        // EVENT HANDLERS
+        // =============================================================================
+
+        scrapeButton.addEventListener('click', async () => {
+            const url = urlInput.value.trim();
+            if (!url || !url.includes('instagram.com')) {
+                showMessage('Please enter a valid Instagram URL.');
+                return;
+            }
+
+            // Clear previous results
+            messageContainer.innerHTML = '';
+            imageGrid.innerHTML = '';
+            resultsControls.classList.add('hidden');
+            allImages = [];
+            selectedImages.clear();
+            
+            // Clear any existing polling
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+
+            const sessionCookie = sessionCookieInput.value.trim();
+            
+            try {
+                setButtonState('starting');
+                showMessage('Starting scraping job...', 'info');
+                
+                // Start the job
+                const jobResponse = await startScrapeJob(url, sessionCookie);
+                currentJobId = jobResponse.jobId;
+                
+                showMessage(`Job started! ID: ${currentJobId}. Polling for results every 5 seconds...`, 'info');
+                setButtonState('processing');
+                
+                // Poll for completion
+                const completedJob = await pollForCompletion(currentJobId);
+                
+                // Display results
+                if (completedJob.results && completedJob.results.imageUrls) {
+                    displayImages(completedJob.results.imageUrls, completedJob.results);
+                } else {
+                    showMessage('Job completed but no images were found.', 'warning');
+                }
+                
+                setButtonState('start');
+                
+            } catch (error) {
+                console.error('❌ Scraping failed:', error);
+                showMessage(`Scraping failed: ${error.message}`);
+                setButtonState('start');
+                
+                // Clear polling interval
+                if (pollingInterval) {
+                    clearInterval(pollingInterval);
+                    pollingInterval = null;
+                }
+            }
+        });
+
+        selectAllCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                selectedImages = new Set(allImages.map(img => img.imgUrl));
+            } else {
+                selectedImages.clear();
+            }
+            updateSelectionUI();
+        });
+
+        downloadButton.addEventListener('click', async () => {
+            if (selectedImages.size === 0) {
+                showMessage("Please select at least one image to download.");
+                return;
+            }
+            setDownloading(true);
+
+            const zip = new JSZip();
+            const promises = Array.from(selectedImages).map(async (src, index) => {
+                try {
+                    const response = await fetch(src);
+                    const blob = await response.blob();
+                    zip.file(`instagram_image_${index + 1}.jpg`, blob);
+                } catch (err) {
+                    console.error(`Failed to download ${src}`, err);
+                }
+            });
+
+            await Promise.all(promises);
+
+            zip.generateAsync({ type: "blob" }).then(content => {
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = 'instagram_images.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                setDownloading(false);
+            });
+        });
+
+        // =============================================================================
+        // CLEANUP
+        // =============================================================================
+        
+        // Clear polling interval when page is unloaded
+        window.addEventListener('beforeunload', () => {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+            }
+        });
+
+    </script>
+</body>
+</html>

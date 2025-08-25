@@ -3,6 +3,7 @@
 <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <meta http-equiv="Content-Security-Policy" content="script-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com https://cdnjs.cloudflare.com; connect-src 'self' https://n8n.gemneye.info https://*.instagram.com; img-src 'self' data: https:; style-src 'self' 'unsafe-inline' https://cdn.tailwindcss.com;">
     <title>Instagram Scraper</title>
     <link rel="icon" type="image/svg+xml" href="/favicon.svg">
     <link rel="alternate icon" href="/favicon.ico">
@@ -59,11 +60,32 @@
     </div>
 
     <script>
+        // --- Global Error Handler to Filter Extension Errors ---
+        window.addEventListener('error', (event) => {
+            // Filter out browser extension errors that don't affect our app
+            if (event.error && event.error.message && 
+                (event.error.message.includes('Could not establish connection') ||
+                 event.error.message.includes('Receiving end does not exist') ||
+                 event.error.message.includes('Extension context invalidated'))) {
+                console.warn('🔧 Browser extension error filtered (not from our app):', event.error.message);
+                event.preventDefault();
+                return false;
+            }
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            // Filter out extension-related promise rejections
+            if (event.reason && event.reason.message &&
+                (event.reason.message.includes('Could not establish connection') ||
+                 event.reason.message.includes('Receiving end does not exist'))) {
+                console.warn('🔧 Browser extension promise rejection filtered:', event.reason.message);
+                event.preventDefault();
+                return false;
+            }
+        });
+
         // --- Configuration ---
-        // Environment variables substituted at container startup
-        const N8N_WEBHOOK_URL = '$N8N_WEBHOOK_URL';
-        const PHANTOM_API_KEY = '$PHANTOMBUSTER_API_KEY';
-        const AGENT_ID = '$AGENT_ID';
+        // Configuration is now handled by the proxy server, no environment variables needed
 
         // --- State Management ---
         let allImages = [];
@@ -114,10 +136,15 @@
 
         const setLoading = (loading) => {
             isLoading = loading;
-            scrapeButton.disabled = loading;
-            scrapeButton.innerHTML = loading ?
-                `<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>` :
-                'Scrape Images';
+            if (loading) {
+                scrapeButton.innerHTML = 'Cancel Job';
+                scrapeButton.className = 'bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-md flex items-center justify-center';
+                scrapeButton.disabled = false; // Enable cancel functionality
+            } else {
+                scrapeButton.innerHTML = 'Scrape Images';
+                scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md flex items-center justify-center';
+                scrapeButton.disabled = false;
+            }
         };
 
         const setDownloading = (downloading) => {
@@ -142,31 +169,23 @@
         };
 
         // --- Core Logic ---
+        // --- Job Management State ---
+        let currentJobId = null;
+        let pollingInterval = null;
+        let jobStartTime = null;
+        let hardTimeout = null;
+        const JOB_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
         scrapeButton.addEventListener('click', async () => {
+            // If currently processing, cancel the job
+            if (isLoading && currentJobId) {
+                cancelCurrentJob();
+                return;
+            }
+
             const url = urlInput.value;
             if (!url || !url.includes('instagram.com')) {
                 showMessage('Please enter a valid Instagram URL.');
-                return;
-            }
-            // Check if environment variables are properly substituted
-            if (N8N_WEBHOOK_URL.startsWith('$') || PHANTOM_API_KEY.startsWith('$') || AGENT_ID.startsWith('$')) {
-                showMessage('App configuration is missing. Please check your .env file and rebuild the container.');
-                return;
-            }
-            
-            // Validate that we have proper values
-            if (!N8N_WEBHOOK_URL.startsWith('http')) {
-                showMessage('N8N webhook URL is not configured properly. Please check your .env file.');
-                return;
-            }
-            
-            if (!PHANTOM_API_KEY || PHANTOM_API_KEY.trim() === '') {
-                showMessage('PhantomBuster API key is not configured. Please check your .env file.');
-                return;
-            }
-            
-            if (!AGENT_ID || AGENT_ID.trim() === '') {
-                showMessage('Agent ID is not configured. Please check your .env file.');
                 return;
             }
 
@@ -180,161 +199,193 @@
             // Get session cookie from input field
             const sessionCookie = sessionCookieInput.value.trim();
             
-            // Construct the payload for N8N webhook
+            // Construct the payload for async job
             const payload = {
                 url: url,
-                phantomApiKey: PHANTOM_API_KEY,
-                agentId: AGENT_ID,
-                csvName: "instagram_scrape_results",
-                numberOfPostsPerProfile: 100,
-                numberOfProfilesPerLaunch: 1,
                 sessionCookie: sessionCookie || ""
             };
 
-            // Declare startTime outside try block to fix scope issue
-            let startTime = performance.now();
-
             try {
-                // === COMPREHENSIVE LOGGING FOR DEBUGGING ===
-                console.log('🚀 Starting webhook request at:', new Date().toISOString());
-                console.log('📍 N8N URL:', N8N_WEBHOOK_URL);
+                console.log('🚀 Starting async scrape job at:', new Date().toISOString());
                 console.log('📦 Payload:', JSON.stringify(payload, null, 2));
                 
-                startTime = performance.now(); // Reset for accurate timing
-                console.log('⏱️ Request start time (performance):', startTime);
-                
-                // Direct call to N8N webhook with extended timeout
-                const controller = new AbortController();
-                const timeoutId = setTimeout(() => controller.abort(), 300000); // 5 minutes timeout
-                
-                const response = await fetch(N8N_WEBHOOK_URL, {
+                // Start async scraping job
+                const response = await fetch('/api/start-scrape', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
-                    signal: controller.signal
+                    body: JSON.stringify(payload)
                 });
                 
-                clearTimeout(timeoutId);
-                
-                const fetchTime = performance.now();
-                console.log('📡 Response received after:', (fetchTime - startTime).toFixed(2), 'ms');
-                console.log('📊 Response status:', response.status);
-                console.log('✅ Response ok:', response.ok);
-                console.log('🏷️ Response status text:', response.statusText);
-                
-                // Log response headers
-                const headers = {};
-                for (const [key, value] of response.headers.entries()) {
-                    headers[key] = value;
-                }
-                console.log('📋 Response headers:', headers);
-                
-                // Get response text and log size
-                const responseText = await response.text();
-                const textTime = performance.now();
-                console.log('📄 Response body received after:', (textTime - startTime).toFixed(2), 'ms');
-                console.log('📏 Response body length:', responseText.length);
-                console.log('🔍 Response body preview (first 500 chars):', responseText.substring(0, 500));
-                
-                // Parse JSON
-                let result;
-                try {
-                    result = JSON.parse(responseText);
-                    const parseTime = performance.now();
-                    console.log('✅ JSON parsed successfully after:', (parseTime - startTime).toFixed(2), 'ms');
-                    console.log('🎯 Parsed result structure:', Object.keys(result).join(', '));
-                    if (Array.isArray(result)) {
-                        console.log('📋 Result is array with length:', result.length);
-                        if (result.length > 0) {
-                            console.log('🔍 First array element keys:', Object.keys(result[0]).join(', '));
-                        }
-                    }
-                } catch (parseError) {
-                    console.error('❌ JSON parsing failed:', parseError);
-                    console.error('🔍 Raw response text:', responseText);
-                    throw new Error(`JSON parsing failed: ${parseError.message}. Raw response: ${responseText.substring(0, 200)}`);
-                }
-
                 if (!response.ok) {
-                    console.error('❌ HTTP error response:', response.status, response.statusText);
-                    throw new Error(result.error || `HTTP ${response.status}: ${response.statusText}`);
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
                 }
 
-                // Handle response format - check if it's an array and extract first element
-                const data = Array.isArray(result) ? result[0] : result;
+                const jobData = await response.json();
+                currentJobId = jobData.jobId;
+                jobStartTime = Date.now();
                 
-                // Handle new response format with success field
-                if (!data.success) {
-                    throw new Error(data.error || 'The scraping service reported a failure.');
-                }
-
-                // Validate the new response structure
-                if (!data.imageUrls || !Array.isArray(data.imageUrls)) {
-                    throw new Error('Invalid response format: imageUrls array not found.');
-                }
+                console.log('✅ Job started successfully:', currentJobId);
+                showMessage(`🚀 Scraping job started (ID: ${currentJobId}). Processing typically takes 2-3 minutes. Click "Cancel Job" to abort.`, 'info');
                 
-                allImages = data.imageUrls.map((url, index) => ({
-                    imgUrl: url,
-                    index: index + 1
-                }));
-
-                if (allImages.length > 0) {
-                    resultsControls.classList.remove('hidden');
-                    
-                    // Display scraping results summary
-                    const summaryMessage = `Found ${allImages.length} images${data.totalImages ? ` (total: ${data.totalImages})` : ''}${data.timestamp ? ` - scraped at ${new Date(data.timestamp).toLocaleString()}` : ''}`;
-                    showMessage(summaryMessage, 'success');
-                    
-                    allImages.forEach((img, index) => {
-                        const card = document.createElement('div');
-                        card.className = 'image-card relative group bg-gray-900 rounded-lg overflow-hidden shadow-lg cursor-pointer';
-                        card.dataset.src = img.imgUrl;
-                        card.innerHTML = `
-                            <img src="${img.imgUrl}" alt="Scraped content ${index + 1}" class="w-full h-full object-cover transition-transform duration-300 group-hover:opacity-50"/>
-                            <div class="absolute top-2 right-2">
-                                <input type="checkbox" class="h-6 w-6 rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-blue-500 pointer-events-none"/>
-                            </div>`;
-                        card.addEventListener('click', () => {
-                            if (selectedImages.has(img.imgUrl)) {
-                                selectedImages.delete(img.imgUrl);
-                            } else {
-                                selectedImages.add(img.imgUrl);
-                            }
-                            updateSelectionUI();
-                        });
-                        imageGrid.appendChild(card);
-                    });
-                    updateSelectionUI();
-                } else {
-                    showMessage('Scraping was successful, but no images were found.');
-                }
+                // Start polling for job status
+                startJobPolling();
+                
+                // Set hard timeout failsafe
+                hardTimeout = setTimeout(() => {
+                    console.warn('⏰ Job hard timeout reached (5 minutes)');
+                    showMessage('Job timed out after 5 minutes. This may indicate an issue with the scraping service.', 'error');
+                    cancelCurrentJob();
+                }, JOB_TIMEOUT_MS);
 
             } catch (err) {
-                // === ENHANCED ERROR LOGGING ===
-                const errorTime = performance.now();
-                console.error('❌ Request failed after:', (errorTime - startTime).toFixed(2), 'ms');
-                console.error('🚨 Error type:', err.constructor.name);
-                console.error('📝 Error message:', err.message);
-                console.error('🔍 Error stack:', err.stack);
-                
-                // Check if it's a network error vs HTTP error
-                if (err.name === 'TypeError' && err.message.includes('fetch')) {
-                    console.error('🌐 Network error detected - possible causes:');
-                    console.error('   • CORS policy blocking request');
-                    console.error('   • Network connectivity issue'); 
-                    console.error('   • Invalid URL or unreachable endpoint');
-                    console.error('   • Request timeout');
-                }
-                
-                showMessage(err.message);
-                console.error("🏁 Scraping process failed:", err);
-            } finally {
-                const totalTime = performance.now();
-                console.log('🏁 Total operation time:', (totalTime - startTime).toFixed(2), 'ms');
-                console.log('⏰ Request completed at:', new Date().toISOString());
+                console.error('❌ Failed to start scrape job:', err.message);
+                showMessage(`Failed to start scraping: ${err.message}`);
                 setLoading(false);
             }
         });
+
+        // Job polling function
+        function startJobPolling() {
+            if (!currentJobId) return;
+            
+            console.log('🔄 Starting job polling for:', currentJobId);
+            
+            pollingInterval = setInterval(async () => {
+                try {
+                    console.log('🔍 Checking job status:', currentJobId);
+                    
+                    const response = await fetch(`/api/job-status/${currentJobId}`);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Status check failed: ${response.status}`);
+                    }
+
+                    const jobStatus = await response.json();
+                    console.log('📊 Job status:', jobStatus.status);
+                    
+                    if (jobStatus.status === 'completed') {
+                        stopJobPolling();
+                        handleJobCompleted(jobStatus);
+                    } else if (jobStatus.status === 'failed') {
+                        stopJobPolling();
+                        handleJobFailed(jobStatus);
+                    } else {
+                        // Still processing, update message with better progress info
+                        const elapsed = Date.now() - jobStartTime;
+                        const elapsedMinutes = Math.floor(elapsed / 60000);
+                        const elapsedSeconds = Math.floor((elapsed % 60000) / 1000);
+                        const remainingMs = JOB_TIMEOUT_MS - elapsed;
+                        const remainingMinutes = Math.floor(remainingMs / 60000);
+                        
+                        let progressMessage = `Scraping in progress... (${elapsedMinutes}:${elapsedSeconds.toString().padStart(2, '0')} elapsed`;
+                        if (remainingMinutes > 0) {
+                            progressMessage += `, ~${remainingMinutes}m remaining`;
+                        }
+                        progressMessage += ')';
+                        
+                        showMessage(progressMessage, 'info');
+                    }
+                    
+                } catch (err) {
+                    console.error('❌ Job status check failed:', err.message);
+                    // Continue polling, temporary network issues shouldn't stop the process
+                }
+            }, 30000); // Check every 30 seconds
+        }
+
+        function stopJobPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            if (hardTimeout) {
+                clearTimeout(hardTimeout);
+                hardTimeout = null;
+            }
+            setLoading(false);
+        }
+
+        function cancelCurrentJob() {
+            console.log('🚫 Cancelling current job:', currentJobId);
+            
+            stopJobPolling();
+            
+            // Reset state
+            currentJobId = null;
+            jobStartTime = null;
+            
+            showMessage('Scraping job was cancelled.', 'info');
+            
+            // Clear any displayed content
+            imageGrid.innerHTML = '';
+            resultsControls.classList.add('hidden');
+            allImages = [];
+            selectedImages.clear();
+        }
+
+        function handleJobCompleted(jobStatus) {
+            console.log('🎉 Job completed successfully:', jobStatus);
+            
+            if (!jobStatus.results || !jobStatus.results.imageUrls) {
+                showMessage('Scraping completed but no images were found.');
+                return;
+            }
+
+            const imageUrls = jobStatus.results.imageUrls;
+            console.log('📊 Processing image URLs:', imageUrls.length, 'urls');
+            console.log('🔍 First few URLs:', imageUrls.slice(0, 3));
+            
+            allImages = imageUrls.map((url, index) => ({
+                imgUrl: url,
+                index: index + 1
+            }));
+
+            if (allImages.length > 0) {
+                resultsControls.classList.remove('hidden');
+                
+                // Display scraping results summary
+                const summaryMessage = `✅ Found ${allImages.length} images${jobStatus.results.totalImages ? ` (total: ${jobStatus.results.totalImages})` : ''}`;
+                showMessage(summaryMessage, 'success');
+                
+                console.log('🎨 Creating image cards for', allImages.length, 'images');
+                
+                allImages.forEach((img, index) => {
+                    if (index < 5) {  // Log first 5 for debugging
+                        console.log(`📌 Creating card ${index + 1} for URL:`, img.imgUrl.substring(0, 100) + '...');
+                    }
+                    
+                    const card = document.createElement('div');
+                    card.className = 'image-card relative group bg-gray-900 rounded-lg overflow-hidden shadow-lg cursor-pointer';
+                    card.dataset.src = img.imgUrl;
+                    card.innerHTML = `
+                        <img src="${img.imgUrl}" alt="Scraped content ${index + 1}" class="w-full h-full object-cover transition-transform duration-300 group-hover:opacity-50"/>
+                        <div class="absolute top-2 right-2">
+                            <input type="checkbox" class="h-6 w-6 rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-blue-500 pointer-events-none"/>
+                        </div>`;
+                    card.addEventListener('click', () => {
+                        if (selectedImages.has(img.imgUrl)) {
+                            selectedImages.delete(img.imgUrl);
+                        } else {
+                            selectedImages.add(img.imgUrl);
+                        }
+                        updateSelectionUI();
+                    });
+                    imageGrid.appendChild(card);
+                });
+                
+                console.log('🏁 Finished creating all image cards. Grid children count:', imageGrid.children.length);
+                updateSelectionUI();
+            } else {
+                showMessage('Scraping completed but no images were found.');
+            }
+        }
+
+        function handleJobFailed(jobStatus) {
+            console.error('❌ Job failed:', jobStatus);
+            const errorMessage = jobStatus.error || 'Unknown error occurred during scraping';
+            showMessage(`Scraping failed: ${errorMessage}`);
+        }
 
         selectAllCheckbox.addEventListener('change', (e) => {
             if (e.target.checked) {
