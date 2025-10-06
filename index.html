@@ -1,24 +1,17 @@
 <!DOCTYPE html>
 <html lang="en">
 <head>
-    <meta charset="UTF-8" />
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Instagram Scraper</title>
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg">
-    <link rel="alternate icon" href="/favicon.ico">
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Profile Scraper</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
     <script src="https://cdn.tailwindcss.com"></script>
-    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
-    <style>
-        * { transition: all 0.2s ease-in-out; }
-        .image-card.selected { ring: 4px; ring-color: #3b82f6; }
-    </style>
 </head>
 <body class="bg-gray-900 text-white">
-
-    <div class="max-w-6xl mx-auto p-4 sm:p-8">
+    <div class="max-w-4xl mx-auto p-4 sm:p-8">
         <header class="text-center mb-8">
             <h1 class="text-4xl font-bold mb-2">Instagram Profile Scraper</h1>
-            <p class="text-gray-400">Enter a profile URL to fetch and download images.</p>
+            <p class="text-gray-400">Enter a profile URL to scrape and download images directly.</p>
         </header>
 
         <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
@@ -29,7 +22,7 @@
                     <input id="session-cookie-input" type="text" placeholder="Instagram session cookie (optional - improves results)"
                         class="flex-grow bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
                     <button id="scrape-button"
-                        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md flex items-center justify-center">
+                        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md">
                         Scrape Images
                     </button>
                 </div>
@@ -41,335 +34,373 @@
 
         <div id="message-container"></div>
 
-        <div id="results-controls" class="hidden">
-            <div class="flex justify-between items-center mb-4 bg-gray-800 p-4 rounded-lg">
-                <div class="flex items-center gap-3">
-                    <input id="select-all-checkbox" type="checkbox"
-                        class="h-6 w-6 rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500" />
-                    <label id="selection-label">Select All</label>
+        <!-- Results Section -->
+        <div id="results-section" class="hidden">
+            <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-6">
+                <h2 class="text-2xl font-bold mb-4 flex items-center">
+                    <span class="text-green-500 mr-2">✅</span>
+                    Scraping Complete!
+                </h2>
+
+                <div id="results-summary" class="mb-6">
+                    <div class="grid grid-cols-1 md:grid-cols-2 gap-4 text-center">
+                        <div class="bg-gray-700 p-4 rounded">
+                            <div id="total-count" class="text-3xl font-bold text-blue-400">0</div>
+                            <div class="text-gray-300">Images Found</div>
+                        </div>
+                        <div class="bg-gray-700 p-4 rounded">
+                            <div id="estimated-size" class="text-3xl font-bold text-green-400">~</div>
+                            <div class="text-gray-300">Estimated Size</div>
+                        </div>
+                    </div>
                 </div>
-                <button id="download-button"
-                    class="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md">
-                    Download Selected
+
+                <button id="download-zip-button"
+                    class="w-full bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-3 px-6 rounded-md flex items-center justify-center mb-4">
+                    <span class="mr-2">📦</span>
+                    Download All as ZIP
                 </button>
+
+                <div class="p-4 bg-gray-700 rounded text-sm">
+                    <h3 class="font-semibold mb-2 text-yellow-300">📋 Image URLs Preview (first 5):</h3>
+                    <div id="url-preview" class="max-h-32 overflow-y-auto text-xs font-mono text-gray-300 mb-2">
+                        <!-- URLs will be populated here -->
+                    </div>
+                    <button id="copy-urls-button" class="text-blue-400 hover:text-blue-300 text-xs">
+                        📋 Copy All URLs to Clipboard
+                    </button>
+                </div>
             </div>
         </div>
 
-        <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+        <!-- Download Progress Section -->
+        <div id="progress-section" class="hidden">
+            <div class="bg-gray-800 p-6 rounded-lg shadow-lg">
+                <h3 class="text-xl font-bold mb-4 flex items-center">
+                    <span class="text-blue-500 mr-2">⏳</span>
+                    Download Progress
+                </h3>
+
+                <div class="mb-4">
+                    <div class="flex justify-between text-sm mb-2">
+                        <span id="progress-text">Preparing download...</span>
+                        <span id="progress-percent">0%</span>
+                    </div>
+                    <div class="w-full bg-gray-700 rounded-full h-4">
+                        <div id="progress-bar" class="bg-blue-600 h-4 rounded-full transition-all duration-300" style="width: 0%"></div>
+                    </div>
+                </div>
+
+                <div id="download-log" class="bg-gray-900 p-4 rounded max-h-64 overflow-y-auto text-xs font-mono">
+                    <!-- Download log messages will appear here -->
+                </div>
+            </div>
+        </div>
     </div>
 
     <script>
-        // --- Configuration ---
-        // Environment variables substituted at container startup
-        const N8N_WEBHOOK_URL = '$N8N_WEBHOOK_URL';
-        const PHANTOM_API_KEY = '$PHANTOMBUSTER_API_KEY';
-        const AGENT_ID = '$AGENT_ID';
+        // State Management
+        let allImageUrls = [];
+        let instagramUsername = '';
+        let currentJobId = null;
+        let jobStartTime = null;
+        let pollingInterval = null;
+        let hardTimeout = null;
+        const JOB_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
 
-        // --- State Management ---
-        let allImages = [];
-        let selectedImages = new Set();
-        let isLoading = false;
-        let isDownloading = false;
-
-        // --- DOM Elements ---
+        // DOM Elements
         const urlInput = document.getElementById('url-input');
         const sessionCookieInput = document.getElementById('session-cookie-input');
         const scrapeButton = document.getElementById('scrape-button');
         const messageContainer = document.getElementById('message-container');
-        const resultsControls = document.getElementById('results-controls');
-        const imageGrid = document.getElementById('image-grid');
-        const selectAllCheckbox = document.getElementById('select-all-checkbox');
-        const selectionLabel = document.getElementById('selection-label');
-        const downloadButton = document.getElementById('download-button');
+        const resultsSection = document.getElementById('results-section');
+        const progressSection = document.getElementById('progress-section');
+        const totalCount = document.getElementById('total-count');
+        const estimatedSize = document.getElementById('estimated-size');
+        const urlPreview = document.getElementById('url-preview');
+        const copyUrlsButton = document.getElementById('copy-urls-button');
+        const downloadZipButton = document.getElementById('download-zip-button');
+        const progressText = document.getElementById('progress-text');
+        const progressPercent = document.getElementById('progress-percent');
+        const progressBar = document.getElementById('progress-bar');
+        const downloadLog = document.getElementById('download-log');
 
-        // --- Helper Functions ---
-        const showMessage = (text, type = 'error') => {
-            let color, bgColor, borderColor, textColor;
-            
-            switch(type) {
-                case 'success':
-                    color = 'green';
-                    bgColor = 'bg-green-500/20';
-                    borderColor = 'border-green-500';
-                    textColor = 'text-green-300';
-                    break;
-                case 'info':
-                    color = 'blue';
-                    bgColor = 'bg-blue-500/20';
-                    borderColor = 'border-blue-500';
-                    textColor = 'text-blue-300';
-                    break;
-                default: // error
-                    color = 'red';
-                    bgColor = 'bg-red-500/20';
-                    borderColor = 'border-red-500';
-                    textColor = 'text-red-300';
-            }
-            
+        // Helper Functions
+        const showMessage = (text, type = 'info') => {
+            const colors = {
+                success: 'bg-green-500/20 border-green-500 text-green-300',
+                info: 'bg-blue-500/20 border-blue-500 text-blue-300',
+                error: 'bg-red-500/20 border-red-500 text-red-300'
+            };
             messageContainer.innerHTML = `
-                <div class="${bgColor} ${borderColor} ${textColor} px-4 py-3 rounded-lg mb-8 text-center">
+                <div class="${colors[type]} px-4 py-3 rounded-lg mb-8 text-center border">
                     <p>${text}</p>
                 </div>`;
         };
 
-        const setLoading = (loading) => {
-            isLoading = loading;
-            scrapeButton.disabled = loading;
-            scrapeButton.innerHTML = loading ?
-                `<div class="animate-spin rounded-full h-5 w-5 border-b-2 border-white"></div>` :
-                'Scrape Images';
+        const formatFileSize = (imageCount) => {
+            const avgSizeMB = 0.5; // Average 500KB per image
+            const totalMB = imageCount * avgSizeMB;
+            return totalMB >= 1 ? `${totalMB.toFixed(1)} MB` : `${(totalMB * 1024).toFixed(0)} KB`;
         };
 
-        const setDownloading = (downloading) => {
-            isDownloading = downloading;
-            downloadButton.disabled = downloading;
-            downloadButton.textContent = downloading ? 'Zipping...' : 'Download Selected';
+        const extractUsername = (url) => {
+            try {
+                const match = url.match(/instagram\.com\/([^\/\?]+)/);
+                return match ? match[1] : 'instagram';
+            } catch {
+                return 'instagram';
+            }
+        };
+
+        const updateProgress = (current, total, text) => {
+            const percent = total > 0 ? Math.round((current / total) * 100) : 0;
+            progressText.textContent = text;
+            progressPercent.textContent = `${percent}%`;
+            progressBar.style.width = `${percent}%`;
+        };
+
+        const logDownload = (message) => {
+            const logEntry = document.createElement('div');
+            logEntry.textContent = `[${new Date().toLocaleTimeString()}] ${message}`;
+            downloadLog.appendChild(logEntry);
+            downloadLog.scrollTop = downloadLog.scrollHeight;
+        };
+
+        const resetInterface = () => {
+            allImageUrls = [];
+            instagramUsername = '';
+            currentJobId = null;
+            jobStartTime = null;
+
+            urlInput.value = '';
+            sessionCookieInput.value = '';
+
+            resultsSection.classList.add('hidden');
+            progressSection.classList.add('hidden');
+            messageContainer.innerHTML = '';
+
+            scrapeButton.innerHTML = 'Scrape Images';
+            scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md';
+
+            stopJobPolling();
+        };
+
+        const showDownloadCompleteOptions = () => {
+            progressSection.classList.add('hidden');
+
+            messageContainer.innerHTML = `
+                <div class="bg-green-500/20 border-green-500 text-green-300 px-4 py-3 rounded-lg mb-8 text-center border">
+                    <p class="mb-4">✅ Download completed successfully! ZIP file has been saved to your Downloads folder.</p>
+                    <button id="scrape-another-button"
+                        class="bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md">
+                        🔄 Scrape Another Profile
+                    </button>
+                </div>`;
+
+            document.getElementById('scrape-another-button').addEventListener('click', resetInterface);
+        };
+
+        // Job Polling Functions
+        function startJobPolling() {
+            if (!currentJobId) return;
+
+            pollingInterval = setInterval(async () => {
+                try {
+                    const response = await fetch(`/api/job-status/${currentJobId}`);
+                    if (!response.ok) throw new Error(`Status check failed: ${response.status}`);
+
+                    const jobStatus = await response.json();
+
+                    if (jobStatus.status === 'completed') {
+                        stopJobPolling();
+                        handleJobCompleted(jobStatus);
+                    } else if (jobStatus.status === 'failed') {
+                        stopJobPolling();
+                        handleJobFailed(jobStatus);
+                    } else {
+                        const elapsed = Date.now() - jobStartTime;
+                        const elapsedMin = Math.floor(elapsed / 60000);
+                        const elapsedSec = Math.floor((elapsed % 60000) / 1000);
+                        showMessage(`Scraping in progress... (${elapsedMin}:${elapsedSec.toString().padStart(2, '0')} elapsed)`, 'info');
+                    }
+                } catch (err) {
+                    console.error('Status check failed:', err);
+                }
+            }, 30000); // Check every 30 seconds
         }
 
-        const updateSelectionUI = () => {
-            selectionLabel.textContent = `Select All (${selectedImages.size} / ${allImages.length})`;
-            selectAllCheckbox.checked = allImages.length > 0 && selectedImages.size === allImages.length;
-            document.querySelectorAll('.image-card').forEach(card => {
-                const checkbox = card.querySelector('input[type="checkbox"]');
-                if (selectedImages.has(card.dataset.src)) {
-                    card.classList.add('ring-4', 'ring-blue-500');
-                    checkbox.checked = true;
-                } else {
-                    card.classList.remove('ring-4', 'ring-blue-500');
-                    checkbox.checked = false;
-                }
-            });
-        };
+        function stopJobPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            if (hardTimeout) {
+                clearTimeout(hardTimeout);
+                hardTimeout = null;
+            }
+        }
 
-        // --- Core Logic ---
+        function handleJobCompleted(jobStatus) {
+            if (!jobStatus.results || !jobStatus.results.imageUrls) {
+                showMessage('Scraping completed but no images were found.', 'error');
+                return;
+            }
+
+            allImageUrls = jobStatus.results.imageUrls;
+            instagramUsername = extractUsername(urlInput.value);
+
+            // Update summary
+            totalCount.textContent = allImageUrls.length;
+            estimatedSize.textContent = formatFileSize(allImageUrls.length);
+
+            // Show URL preview (first 5 URLs)
+            const previewUrls = allImageUrls.slice(0, 5);
+            urlPreview.innerHTML = previewUrls.map(url =>
+                `<div class="truncate">${url}</div>`
+            ).join('');
+            if (allImageUrls.length > 5) {
+                urlPreview.innerHTML += `<div class="text-gray-500 mt-2">...and ${allImageUrls.length - 5} more</div>`;
+            }
+
+            // Show results section
+            resultsSection.classList.remove('hidden');
+            showMessage(`✅ Successfully found ${allImageUrls.length} images from @${instagramUsername}`, 'success');
+
+            scrapeButton.innerHTML = 'Scrape Images';
+            scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md';
+        }
+
+        function handleJobFailed(jobStatus) {
+            const errorMessage = jobStatus.error || 'Unknown error occurred during scraping';
+            showMessage(`Scraping failed: ${errorMessage}`, 'error');
+            scrapeButton.innerHTML = 'Scrape Images';
+            scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md';
+        }
+
+        // Event Listeners
         scrapeButton.addEventListener('click', async () => {
+            // Cancel job if currently processing
+            if (currentJobId) {
+                stopJobPolling();
+                currentJobId = null;
+                showMessage('Scraping job was cancelled.', 'info');
+                scrapeButton.innerHTML = 'Scrape Images';
+                scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md';
+                return;
+            }
+
             const url = urlInput.value;
             if (!url || !url.includes('instagram.com')) {
-                showMessage('Please enter a valid Instagram URL.');
-                return;
-            }
-            // Check if environment variables are properly substituted
-            if (N8N_WEBHOOK_URL.startsWith('$') || PHANTOM_API_KEY.startsWith('$') || AGENT_ID.startsWith('$')) {
-                showMessage('App configuration is missing. Please check your .env file and rebuild the container.');
-                return;
-            }
-            
-            // Validate that we have proper values
-            if (!N8N_WEBHOOK_URL.startsWith('http')) {
-                showMessage('N8N webhook URL is not configured properly. Please check your .env file.');
-                return;
-            }
-            
-            if (!PHANTOM_API_KEY || PHANTOM_API_KEY.trim() === '') {
-                showMessage('PhantomBuster API key is not configured. Please check your .env file.');
-                return;
-            }
-            
-            if (!AGENT_ID || AGENT_ID.trim() === '') {
-                showMessage('Agent ID is not configured. Please check your .env file.');
+                showMessage('Please enter a valid Instagram URL.', 'error');
                 return;
             }
 
-            setLoading(true);
             messageContainer.innerHTML = '';
-            imageGrid.innerHTML = '';
-            resultsControls.classList.add('hidden');
-            allImages = [];
-            selectedImages.clear();
+            resultsSection.classList.add('hidden');
+            progressSection.classList.add('hidden');
+            allImageUrls = [];
 
-            // Get session cookie from input field
-            const sessionCookie = sessionCookieInput.value.trim();
-            
-            // Construct the payload for N8N webhook
-            const payload = {
-                url: url,
-                phantomApiKey: PHANTOM_API_KEY,
-                agentId: AGENT_ID,
-                csvName: "instagram_scrape_results",
-                numberOfPostsPerProfile: 100,
-                numberOfProfilesPerLaunch: 1,
-                sessionCookie: sessionCookie || ""
-            };
-
-            // Declare startTime outside try block to fix scope issue
-            let startTime = performance.now();
+            scrapeButton.innerHTML = 'Cancel Job';
+            scrapeButton.className = 'bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-md';
 
             try {
-                // === COMPREHENSIVE LOGGING FOR DEBUGGING ===
-                console.log('🚀 Starting webhook request at:', new Date().toISOString());
-                console.log('📍 N8N URL:', N8N_WEBHOOK_URL);
-                console.log('📦 Payload:', JSON.stringify(payload, null, 2));
-                
-                startTime = performance.now(); // Reset for accurate timing
-                console.log('⏱️ Request start time (performance):', startTime);
-                
-                // Direct call to N8N webhook
-                const response = await fetch(N8N_WEBHOOK_URL, {
+                const response = await fetch('/api/start-scrape', {
                     method: 'POST',
                     headers: { 'Content-Type': 'application/json' },
-                    body: JSON.stringify(payload),
+                    body: JSON.stringify({
+                        url: url,
+                        sessionCookie: sessionCookieInput.value.trim() || ""
+                    })
                 });
-                
-                const fetchTime = performance.now();
-                console.log('📡 Response received after:', (fetchTime - startTime).toFixed(2), 'ms');
-                console.log('📊 Response status:', response.status);
-                console.log('✅ Response ok:', response.ok);
-                console.log('🏷️ Response status text:', response.statusText);
-                
-                // Log response headers
-                const headers = {};
-                for (const [key, value] of response.headers.entries()) {
-                    headers[key] = value;
-                }
-                console.log('📋 Response headers:', headers);
-                
-                // Get response text and log size
-                const responseText = await response.text();
-                const textTime = performance.now();
-                console.log('📄 Response body received after:', (textTime - startTime).toFixed(2), 'ms');
-                console.log('📏 Response body length:', responseText.length);
-                console.log('🔍 Response body preview (first 500 chars):', responseText.substring(0, 500));
-                
-                // Parse JSON
-                let result;
-                try {
-                    result = JSON.parse(responseText);
-                    const parseTime = performance.now();
-                    console.log('✅ JSON parsed successfully after:', (parseTime - startTime).toFixed(2), 'ms');
-                    console.log('🎯 Parsed result structure:', Object.keys(result).join(', '));
-                    if (Array.isArray(result)) {
-                        console.log('📋 Result is array with length:', result.length);
-                        if (result.length > 0) {
-                            console.log('🔍 First array element keys:', Object.keys(result[0]).join(', '));
-                        }
-                    }
-                } catch (parseError) {
-                    console.error('❌ JSON parsing failed:', parseError);
-                    console.error('🔍 Raw response text:', responseText);
-                    throw new Error(`JSON parsing failed: ${parseError.message}. Raw response: ${responseText.substring(0, 200)}`);
-                }
 
                 if (!response.ok) {
-                    console.error('❌ HTTP error response:', response.status, response.statusText);
-                    throw new Error(result.error || `HTTP ${response.status}: ${response.statusText}`);
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}`);
                 }
 
-                // Handle response format - check if it's an array and extract first element
-                const data = Array.isArray(result) ? result[0] : result;
-                
-                // Handle new response format with success field
-                if (!data.success) {
-                    throw new Error(data.error || 'The scraping service reported a failure.');
-                }
+                const jobData = await response.json();
+                currentJobId = jobData.jobId;
+                jobStartTime = Date.now();
 
-                // Validate the new response structure
-                if (!data.imageUrls || !Array.isArray(data.imageUrls)) {
-                    throw new Error('Invalid response format: imageUrls array not found.');
-                }
-                
-                allImages = data.imageUrls.map((url, index) => ({
-                    imgUrl: url,
-                    index: index + 1
-                }));
+                showMessage(`🚀 Scraping job started. Processing typically takes 2-3 minutes. Click "Cancel Job" to abort.`, 'info');
+                startJobPolling();
 
-                if (allImages.length > 0) {
-                    resultsControls.classList.remove('hidden');
-                    
-                    // Display scraping results summary
-                    const summaryMessage = `Found ${allImages.length} images${data.totalImages ? ` (total: ${data.totalImages})` : ''}${data.timestamp ? ` - scraped at ${new Date(data.timestamp).toLocaleString()}` : ''}`;
-                    showMessage(summaryMessage, 'success');
-                    
-                    allImages.forEach((img, index) => {
-                        const card = document.createElement('div');
-                        card.className = 'image-card relative group bg-gray-900 rounded-lg overflow-hidden shadow-lg cursor-pointer';
-                        card.dataset.src = img.imgUrl;
-                        card.innerHTML = `
-                            <img src="${img.imgUrl}" alt="Scraped content ${index + 1}" class="w-full h-full object-cover transition-transform duration-300 group-hover:opacity-50"/>
-                            <div class="absolute top-2 right-2">
-                                <input type="checkbox" class="h-6 w-6 rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-blue-500 pointer-events-none"/>
-                            </div>`;
-                        card.addEventListener('click', () => {
-                            if (selectedImages.has(img.imgUrl)) {
-                                selectedImages.delete(img.imgUrl);
-                            } else {
-                                selectedImages.add(img.imgUrl);
-                            }
-                            updateSelectionUI();
-                        });
-                        imageGrid.appendChild(card);
-                    });
-                    updateSelectionUI();
-                } else {
-                    showMessage('Scraping was successful, but no images were found.');
-                }
+                hardTimeout = setTimeout(() => {
+                    showMessage('Job timed out after 5 minutes.', 'error');
+                    stopJobPolling();
+                    currentJobId = null;
+                }, JOB_TIMEOUT_MS);
 
             } catch (err) {
-                // === ENHANCED ERROR LOGGING ===
-                const errorTime = performance.now();
-                console.error('❌ Request failed after:', (errorTime - startTime).toFixed(2), 'ms');
-                console.error('🚨 Error type:', err.constructor.name);
-                console.error('📝 Error message:', err.message);
-                console.error('🔍 Error stack:', err.stack);
-                
-                // Check if it's a network error vs HTTP error
-                if (err.name === 'TypeError' && err.message.includes('fetch')) {
-                    console.error('🌐 Network error detected - possible causes:');
-                    console.error('   • CORS policy blocking request');
-                    console.error('   • Network connectivity issue'); 
-                    console.error('   • Invalid URL or unreachable endpoint');
-                    console.error('   • Request timeout');
-                }
-                
-                showMessage(err.message);
-                console.error("🏁 Scraping process failed:", err);
-            } finally {
-                const totalTime = performance.now();
-                console.log('🏁 Total operation time:', (totalTime - startTime).toFixed(2), 'ms');
-                console.log('⏰ Request completed at:', new Date().toISOString());
-                setLoading(false);
+                showMessage(`Failed to start scraping: ${err.message}`, 'error');
+                scrapeButton.innerHTML = 'Scrape Images';
+                scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 text-white font-bold py-2 px-6 rounded-md';
             }
         });
 
-        selectAllCheckbox.addEventListener('change', (e) => {
-            if (e.target.checked) {
-                selectedImages = new Set(allImages.map(img => img.imgUrl));
-            } else {
-                selectedImages.clear();
+        copyUrlsButton.addEventListener('click', async () => {
+            try {
+                await navigator.clipboard.writeText(allImageUrls.join('\n'));
+                copyUrlsButton.textContent = '✅ Copied!';
+                setTimeout(() => {
+                    copyUrlsButton.textContent = '📋 Copy All URLs to Clipboard';
+                }, 2000);
+            } catch (err) {
+                copyUrlsButton.textContent = '❌ Failed to copy';
+                setTimeout(() => {
+                    copyUrlsButton.textContent = '📋 Copy All URLs to Clipboard';
+                }, 2000);
             }
-            updateSelectionUI();
         });
 
-        downloadButton.addEventListener('click', async () => {
-            if (selectedImages.size === 0) {
-                showMessage("Please select at least one image to download.");
-                return;
-            }
-            setDownloading(true);
+        downloadZipButton.addEventListener('click', async () => {
+            if (allImageUrls.length === 0) return;
 
-            const zip = new JSZip();
-            const promises = Array.from(selectedImages).map(async (src, index) => {
-                try {
-                    const response = await fetch(src);
-                    const blob = await response.blob();
-                    zip.file(`instagram_image_${index + 1}.jpg`, blob);
-                } catch (err) {
-                    console.error(`Failed to download ${src}`, err);
+            resultsSection.classList.add('hidden');
+            progressSection.classList.remove('hidden');
+            downloadLog.innerHTML = '';
+
+            logDownload(`Starting server-side download of ${allImageUrls.length} images...`);
+            updateProgress(0, 1, 'Preparing download...');
+
+            try {
+                const response = await fetch('/api/download-images', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({
+                        imageUrls: allImageUrls,
+                        sessionCookie: sessionCookieInput.value.trim(),
+                        username: instagramUsername
+                    })
+                });
+
+                if (!response.ok) {
+                    throw new Error(`Server returned ${response.status}`);
                 }
-            });
 
-            await Promise.all(promises);
+                updateProgress(1, 1, 'Download complete!');
+                logDownload('✅ Server successfully created ZIP file');
 
-            zip.generateAsync({ type: "blob" }).then(content => {
+                const blob = await response.blob();
                 const link = document.createElement('a');
-                link.href = URL.createObjectURL(content);
-                link.download = 'instagram_images.zip';
+                link.href = URL.createObjectURL(blob);
+                link.download = `${instagramUsername}_images.zip`;
                 document.body.appendChild(link);
                 link.click();
                 document.body.removeChild(link);
-                setDownloading(false);
-            });
+
+                logDownload(`✅ ZIP file downloaded: ${instagramUsername}_images.zip (${(blob.size / 1024 / 1024).toFixed(1)} MB)`);
+
+                // Show success message with reset button
+                setTimeout(showDownloadCompleteOptions, 1000);
+
+            } catch (err) {
+                logDownload(`❌ Download failed: ${err.message}`);
+                updateProgress(0, 1, 'Download failed');
+                showMessage(`Download failed: ${err.message}. Please try again or check the server logs.`, 'error');
+            }
         });
     </script>
 </body>
 </html>
-

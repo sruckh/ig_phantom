@@ -1,0 +1,563 @@
+<!DOCTYPE html>
+<html lang="en">
+
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Instagram Profile Scraper</title>
+    <link rel="icon" href="/favicon.svg" type="image/svg+xml">
+    <script src="https://cdn.tailwindcss.com"></script>
+    <script src="https://cdnjs.cloudflare.com/ajax/libs/jszip/3.10.1/jszip.min.js"></script>
+</head>
+
+<body class="bg-gray-900 text-white">
+
+    <div class="max-w-6xl mx-auto p-4 sm:p-8">
+        <header class="text-center mb-8">
+            <h1 class="text-4xl font-bold mb-2">Instagram Profile Scraper</h1>
+            <p class="text-gray-400">Enter a profile URL to fetch and download images.</p>
+        </header>
+
+        <div class="bg-gray-800 p-6 rounded-lg shadow-lg mb-8">
+            <div class="flex flex-col gap-4">
+                <input id="url-input" type="text" placeholder="https://www.instagram.com/username"
+                    class="bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500" />
+                <div class="flex flex-col sm:flex-row gap-4">
+                    <input id="session-cookie-input" type="text" placeholder="Instagram session cookie (optional - improves results)"
+                        class="flex-grow bg-gray-700 text-white px-4 py-2 rounded-md focus:outline-none focus:ring-2 focus:ring-blue-500 text-sm" />
+                    <button id="scrape-button"
+                        class="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md flex items-center justify-center">
+                        Scrape Images
+                    </button>
+                </div>
+                <p class="text-gray-400 text-xs">
+                    💡 Tip: Adding your Instagram session cookie can improve scraping results and bypass some rate limits.
+                </p>
+            </div>
+        </div>
+
+        <div id="message-container"></div>
+
+        <div id="results-controls" class="hidden">
+            <div class="flex justify-between items-center mb-4 bg-gray-800 p-4 rounded-lg">
+                <div class="flex items-center gap-3">
+                    <input id="select-all-checkbox" type="checkbox"
+                        class="h-6 w-6 rounded text-blue-600 bg-gray-700 border-gray-600 focus:ring-blue-500" />
+                    <label id="selection-label">Select All</label>
+                </div>
+                <button id="download-button"
+                    class="bg-green-600 hover:bg-green-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md">
+                    Download Selected
+                </button>
+            </div>
+        </div>
+
+        <div id="image-grid" class="grid grid-cols-2 sm:grid-cols-3 md:grid-cols-4 lg:grid-cols-5 gap-4"></div>
+    </div>
+
+    <script>
+        // --- Global Error Handler to Filter Extension Errors ---
+        window.addEventListener('error', (event) => {
+            // Filter out browser extension errors that don't affect our app
+            if (event.error && event.error.message && 
+                (event.error.message.includes('Could not establish connection') ||
+                 event.error.message.includes('Receiving end does not exist') ||
+                 event.error.message.includes('Extension context invalidated'))) {
+                console.warn('🔧 Browser extension error filtered (not from our app):', event.error.message);
+                event.preventDefault();
+                return false;
+            }
+        });
+
+        window.addEventListener('unhandledrejection', (event) => {
+            // Filter out extension-related promise rejections
+            if (event.reason && event.reason.message &&
+                (event.reason.message.includes('Could not establish connection') ||
+                 event.reason.message.includes('Receiving end does not exist'))) {
+                console.warn('🔧 Browser extension promise rejection filtered:', event.reason.message);
+                event.preventDefault();
+                return false;
+            }
+        });
+
+        // --- Configuration ---
+        // Configuration is now handled by the proxy server, no environment variables needed
+
+        // --- State Management ---
+        let allImages = [];
+        let selectedImages = new Set();
+        let isLoading = false;
+        let isDownloading = false;
+
+        // --- DOM Elements ---
+        const urlInput = document.getElementById('url-input');
+        const sessionCookieInput = document.getElementById('session-cookie-input');
+        const scrapeButton = document.getElementById('scrape-button');
+        const messageContainer = document.getElementById('message-container');
+        const resultsControls = document.getElementById('results-controls');
+        const imageGrid = document.getElementById('image-grid');
+        const selectAllCheckbox = document.getElementById('select-all-checkbox');
+        const selectionLabel = document.getElementById('selection-label');
+        const downloadButton = document.getElementById('download-button');
+
+        // --- Helper Functions ---
+        const showMessage = (text, type = 'error') => {
+            let color, bgColor, borderColor, textColor;
+            
+            switch(type) {
+                case 'success':
+                    color = 'green';
+                    bgColor = 'bg-green-500/20';
+                    borderColor = 'border-green-500';
+                    textColor = 'text-green-300';
+                    break;
+                case 'info':
+                    color = 'blue';
+                    bgColor = 'bg-blue-500/20';
+                    borderColor = 'border-blue-500';
+                    textColor = 'text-blue-300';
+                    break;
+                default: // error
+                    color = 'red';
+                    bgColor = 'bg-red-500/20';
+                    borderColor = 'border-red-500';
+                    textColor = 'text-red-300';
+            }
+            
+            messageContainer.innerHTML = `
+                <div class="${bgColor} ${borderColor} ${textColor} px-4 py-3 rounded-lg mb-8 text-center">
+                    <p>${text}</p>
+                </div>`;
+        };
+
+        const setLoading = (loading) => {
+            isLoading = loading;
+            if (loading) {
+                scrapeButton.innerHTML = 'Cancel Job';
+                scrapeButton.className = 'bg-red-600 hover:bg-red-700 text-white font-bold py-2 px-6 rounded-md flex items-center justify-center';
+                scrapeButton.disabled = false; // Enable cancel functionality
+            } else {
+                scrapeButton.innerHTML = 'Scrape Images';
+                scrapeButton.className = 'bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600 disabled:cursor-not-allowed text-white font-bold py-2 px-6 rounded-md flex items-center justify-center';
+                scrapeButton.disabled = false;
+            }
+        };
+
+        const setDownloading = (downloading) => {
+            isDownloading = downloading;
+            downloadButton.disabled = downloading;
+            downloadButton.textContent = downloading ? 'Zipping...' : 'Download Selected';
+        }
+
+        const updateSelectionUI = () => {
+            selectionLabel.textContent = `Select All (${selectedImages.size} / ${allImages.length})`;
+            selectAllCheckbox.checked = allImages.length > 0 && selectedImages.size === allImages.length;
+            document.querySelectorAll('.image-card').forEach(card => {
+                const checkbox = card.querySelector('input[type="checkbox"]');
+                if (selectedImages.has(card.dataset.src)) {
+                    card.classList.add('ring-4', 'ring-blue-500');
+                    checkbox.checked = true;
+                } else {
+                    card.classList.remove('ring-4', 'ring-blue-500');
+                    checkbox.checked = false;
+                }
+            });
+        };
+
+        // --- Core Logic ---
+        // --- Job Management State ---
+        let currentJobId = null;
+        let pollingInterval = null;
+        let jobStartTime = null;
+        let hardTimeout = null;
+        const JOB_TIMEOUT_MS = 5 * 60 * 1000; // 5 minutes
+
+        scrapeButton.addEventListener('click', async () => {
+            // If currently processing, cancel the job
+            if (isLoading && currentJobId) {
+                cancelCurrentJob();
+                return;
+            }
+
+            const url = urlInput.value;
+            if (!url || !url.includes('instagram.com')) {
+                showMessage('Please enter a valid Instagram URL.');
+                return;
+            }
+
+            setLoading(true);
+            messageContainer.innerHTML = '';
+            imageGrid.innerHTML = '';
+            resultsControls.classList.add('hidden');
+            allImages = [];
+            selectedImages.clear();
+
+            // Get session cookie from input field
+            const sessionCookie = sessionCookieInput.value.trim();
+            
+            // Construct the payload for async job
+            const payload = {
+                url: url,
+                sessionCookie: sessionCookie || ""
+            };
+
+            try {
+                console.log('🚀 Starting async scrape job at:', new Date().toISOString());
+                console.log('📦 Payload:', JSON.stringify(payload, null, 2));
+                
+                // Start async scraping job
+                const response = await fetch('/api/start-scrape', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify(payload)
+                });
+                
+                if (!response.ok) {
+                    const errorData = await response.json();
+                    throw new Error(errorData.error || `HTTP ${response.status}: ${response.statusText}`);
+                }
+
+                const jobData = await response.json();
+                currentJobId = jobData.jobId;
+                jobStartTime = Date.now();
+                
+                console.log('✅ Job started successfully:', currentJobId);
+                showMessage(`🚀 Scraping job started (ID: ${currentJobId}). Processing typically takes 2-3 minutes. Click "Cancel Job" to abort.`, 'info');
+                
+                // Start polling for job status
+                startJobPolling();
+                
+                // Set hard timeout failsafe
+                hardTimeout = setTimeout(() => {
+                    console.warn('⏰ Job hard timeout reached (5 minutes)');
+                    showMessage('Job timed out after 5 minutes. This may indicate an issue with the scraping service.', 'error');
+                    cancelCurrentJob();
+                }, JOB_TIMEOUT_MS);
+
+            } catch (err) {
+                console.error('❌ Failed to start scrape job:', err.message);
+                showMessage(`Failed to start scraping: ${err.message}`);
+                setLoading(false);
+            }
+        });
+
+        // Job polling function
+        function startJobPolling() {
+            if (!currentJobId) return;
+            
+            console.log('🔄 Starting job polling for:', currentJobId);
+            
+            pollingInterval = setInterval(async () => {
+                try {
+                    console.log('🔍 Checking job status:', currentJobId);
+                    
+                    const response = await fetch(`/api/job-status/${currentJobId}`);
+                    
+                    if (!response.ok) {
+                        throw new Error(`Status check failed: ${response.status}`);
+                    }
+
+                    const jobStatus = await response.json();
+                    console.log('📊 Job status:', jobStatus.status);
+                    
+                    if (jobStatus.status === 'completed') {
+                        stopJobPolling();
+                        handleJobCompleted(jobStatus);
+                    } else if (jobStatus.status === 'failed') {
+                        stopJobPolling();
+                        handleJobFailed(jobStatus);
+                    } else {
+                        // Still processing, update message with better progress info
+                        const elapsed = Date.now() - jobStartTime;
+                        const elapsedMinutes = Math.floor(elapsed / 60000);
+                        const elapsedSeconds = Math.floor((elapsed % 60000) / 1000);
+                        const remainingMs = JOB_TIMEOUT_MS - elapsed;
+                        const remainingMinutes = Math.floor(remainingMs / 60000);
+                        
+                        let progressMessage = `Scraping in progress... (${elapsedMinutes}:${elapsedSeconds.toString().padStart(2, '0')} elapsed`;
+                        if (remainingMinutes > 0) {
+                            progressMessage += `, ~${remainingMinutes}m remaining`;
+                        }
+                        progressMessage += ')';
+                        
+                        showMessage(progressMessage, 'info');
+                    }
+                    
+                } catch (err) {
+                    console.error('❌ Job status check failed:', err.message);
+                    // Continue polling, temporary network issues shouldn't stop the process
+                }
+            }, 30000); // Check every 30 seconds
+        }
+
+        function stopJobPolling() {
+            if (pollingInterval) {
+                clearInterval(pollingInterval);
+                pollingInterval = null;
+            }
+            if (hardTimeout) {
+                clearTimeout(hardTimeout);
+                hardTimeout = null;
+            }
+            setLoading(false);
+        }
+
+        function cancelCurrentJob() {
+            console.log('🚫 Cancelling current job:', currentJobId);
+            
+            stopJobPolling();
+            
+            // Reset state
+            currentJobId = null;
+            jobStartTime = null;
+            
+            showMessage('Scraping job was cancelled.', 'info');
+            
+            // Clear any displayed content
+            imageGrid.innerHTML = '';
+            resultsControls.classList.add('hidden');
+            allImages = [];
+            selectedImages.clear();
+        }
+
+        function handleJobCompleted(jobStatus) {
+            console.log('🎉 Job completed successfully:', jobStatus);
+            
+            if (!jobStatus.results || !jobStatus.results.imageUrls) {
+                showMessage('Scraping completed but no images were found.');
+                return;
+            }
+
+            const imageUrls = jobStatus.results.imageUrls;
+            console.log('📊 Processing image URLs:', imageUrls.length, 'urls');
+            console.log('🔍 First few URLs:', imageUrls.slice(0, 3));
+            
+            allImages = imageUrls.map((url, index) => ({
+                imgUrl: url,
+                index: index + 1
+            }));
+
+            if (allImages.length > 0) {
+                resultsControls.classList.remove('hidden');
+                
+                // Display scraping results summary
+                const summaryMessage = `✅ Found ${allImages.length} images${jobStatus.results.totalImages ? ` (total: ${jobStatus.results.totalImages})` : ''}`;
+                showMessage(summaryMessage, 'success');
+                
+                console.log('🎨 Creating image cards for', allImages.length, 'images');
+                
+                let loadedCount = 0;
+                let failedCount = 0;
+                
+                allImages.forEach((img, index) => {
+                    if (index < 5) {  // Log first 5 for debugging
+                        console.log(`📌 Creating card ${index + 1} for URL:`, img.imgUrl.substring(0, 100) + '...');
+                    }
+                    
+                    const card = document.createElement('div');
+                    card.className = 'image-card relative group bg-gray-900 rounded-lg overflow-hidden shadow-lg cursor-pointer min-h-48';
+                    card.dataset.src = img.imgUrl;
+                    
+                    // Create image element with error handling
+                    const imgElement = document.createElement('img');
+                    imgElement.src = img.imgUrl;
+                    imgElement.alt = `Scraped content ${index + 1}`;
+                    imgElement.className = 'w-full h-full object-cover transition-transform duration-300 group-hover:opacity-50';
+                    
+                    // Add loading placeholder
+                    const placeholder = document.createElement('div');
+                    placeholder.className = 'w-full h-48 bg-gray-700 flex items-center justify-center text-gray-400';
+                    placeholder.innerHTML = '⏳ Loading...';
+                    
+                    // Error fallback
+                    const errorFallback = document.createElement('div');
+                    errorFallback.className = 'w-full h-48 bg-red-900/20 border-2 border-red-600 flex flex-col items-center justify-center text-red-300 text-sm p-2';
+                    errorFallback.innerHTML = `
+                        <span class="text-2xl mb-2">🚫</span>
+                        <span class="text-center">Image failed to load<br><small class="text-xs text-gray-400">Instagram blocking hotlinks</small></span>
+                    `;
+                    
+                    imgElement.onload = function() {
+                        loadedCount++;
+                        placeholder.remove();
+                        console.log(`✅ Image ${index + 1} loaded successfully (${loadedCount}/${allImages.length})`);
+                        
+                        // Update summary message with loading progress
+                        if (loadedCount + failedCount === allImages.length) {
+                            const finalMessage = `✅ Found ${allImages.length} images - ${loadedCount} loaded successfully, ${failedCount} failed to load`;
+                            showMessage(finalMessage, loadedCount > 0 ? 'success' : 'info');
+                            
+                            if (failedCount > 0) {
+                                setTimeout(() => {
+                                    showMessage(`ℹ️ ${failedCount} images failed to load due to Instagram's hotlink protection. This is expected behavior - the image URLs are still valid.`, 'info');
+                                }, 2000);
+                            }
+                        }
+                    };
+                    
+                    imgElement.onerror = function() {
+                        failedCount++;
+                        placeholder.remove();
+                        imgElement.remove();
+                        card.appendChild(errorFallback);
+                        console.warn(`❌ Image ${index + 1} failed to load - Instagram blocking hotlinks (${failedCount} total failures)`);
+                        
+                        // Update summary message with loading progress  
+                        if (loadedCount + failedCount === allImages.length) {
+                            const finalMessage = `✅ Found ${allImages.length} images - ${loadedCount} loaded successfully, ${failedCount} failed to load`;
+                            showMessage(finalMessage, loadedCount > 0 ? 'success' : 'info');
+                            
+                            if (failedCount > 0) {
+                                setTimeout(() => {
+                                    showMessage(`ℹ️ ${failedCount} images failed to load due to Instagram's hotlink protection. This is expected behavior - the image URLs are still valid.`, 'info');
+                                }, 2000);
+                            }
+                        }
+                    };
+                    
+                    // Create checkbox overlay
+                    const checkboxOverlay = document.createElement('div');
+                    checkboxOverlay.className = 'absolute top-2 right-2';
+                    checkboxOverlay.innerHTML = `
+                        <input type="checkbox" class="h-6 w-6 rounded text-blue-600 bg-gray-800 border-gray-600 focus:ring-blue-500 pointer-events-none"/>
+                    `;
+                    
+                    // Assemble card
+                    card.appendChild(placeholder); // Start with loading placeholder
+                    card.appendChild(imgElement); // Add image (will replace placeholder on load/error)
+                    card.appendChild(checkboxOverlay);
+                    
+                    card.addEventListener('click', () => {
+                        // Allow selection of all images, even failed ones (they still have valid URLs)
+                        if (selectedImages.has(img.imgUrl)) {
+                            selectedImages.delete(img.imgUrl);
+                        } else {
+                            selectedImages.add(img.imgUrl);
+                        }
+                        updateSelectionUI();
+                    });
+                    imageGrid.appendChild(card);
+                });
+                
+                console.log('🏁 Finished creating all image cards. Grid children count:', imageGrid.children.length);
+                console.log('⏳ Images are loading asynchronously - check console for progress updates');
+                updateSelectionUI();
+            } else {
+                showMessage('Scraping completed but no images were found.');
+            }
+        }
+
+        function handleJobFailed(jobStatus) {
+            console.error('❌ Job failed:', jobStatus);
+            const errorMessage = jobStatus.error || 'Unknown error occurred during scraping';
+            showMessage(`Scraping failed: ${errorMessage}`);
+        }
+
+        selectAllCheckbox.addEventListener('change', (e) => {
+            if (e.target.checked) {
+                selectedImages = new Set(allImages.map(img => img.imgUrl));
+            } else {
+                selectedImages.clear();
+            }
+            updateSelectionUI();
+        });
+
+        downloadButton.addEventListener('click', async () => {
+            if (selectedImages.size === 0) {
+                showMessage("Please select at least one image to download.");
+                return;
+            }
+            setDownloading(true);
+
+            console.log('📦 Starting download process for', selectedImages.size, 'images');
+            showMessage(`📦 Preparing to download ${selectedImages.size} images... This may take a moment.`, 'info');
+
+            try {
+                // Method 1: Try to create server-side download endpoint
+                const response = await fetch('/api/download-images', {
+                    method: 'POST',
+                    headers: { 'Content-Type': 'application/json' },
+                    body: JSON.stringify({ 
+                        imageUrls: Array.from(selectedImages),
+                        sessionCookie: sessionCookieInput.value.trim()
+                    })
+                });
+
+                if (response.ok) {
+                    // Server-side download successful
+                    const blob = await response.blob();
+                    const link = document.createElement('a');
+                    link.href = URL.createObjectURL(blob);
+                    link.download = 'instagram_images.zip';
+                    document.body.appendChild(link);
+                    link.click();
+                    document.body.removeChild(link);
+                    showMessage(`✅ Downloaded ${selectedImages.size} images successfully!`, 'success');
+                } else {
+                    throw new Error('Server-side download not available');
+                }
+            } catch (err) {
+                console.warn('⚠️ Server-side download failed, trying client-side method:', err.message);
+                
+                // Fallback: Client-side download with enhanced error handling
+                const zip = new JSZip();
+                let successCount = 0;
+                let failCount = 0;
+                
+                showMessage(`🔄 Attempting to download images directly... This may not work due to Instagram's CORS policy.`, 'info');
+                
+                const promises = Array.from(selectedImages).map(async (src, index) => {
+                    try {
+                        console.log(`📥 Attempting to fetch image ${index + 1}:`, src.substring(0, 100) + '...');
+                        
+                        // Try to fetch the image with different approaches
+                        const response = await fetch(src, {
+                            credentials: 'omit'
+                        });
+                        
+                        if (!response.ok) {
+                            throw new Error(`HTTP ${response.status}: ${response.statusText}`);
+                        }
+                        
+                        const blob = await response.blob();
+                        
+                        // Check if we actually got image data
+                        if (blob.size > 0) {
+                            zip.file(`instagram_image_${index + 1}.jpg`, blob);
+                            successCount++;
+                            console.log(`✅ Successfully fetched image ${index + 1} (${blob.size} bytes)`);
+                        } else {
+                            throw new Error(`Empty image data: ${blob.size} bytes`);
+                        }
+                    } catch (err) {
+                        failCount++;
+                        console.error(`❌ Failed to download image ${index + 1}:`, err.message);
+                        
+                        // Add a placeholder file to indicate the failure
+                        zip.file(`FAILED_instagram_image_${index + 1}.txt`, `Failed to download image from: ${src}\n\nError: ${err.message}\n\nThis is due to Instagram's hotlink protection. The image URL is valid but cannot be accessed directly from the browser.\n\nTo download this image:\n1. Copy the URL above\n2. Open it in a new browser tab\n3. Right-click and save the image manually`);
+                    }
+                });
+
+                await Promise.all(promises);
+                
+                // Generate ZIP even if some downloads failed
+                const content = await zip.generateAsync({ type: "blob" });
+                const link = document.createElement('a');
+                link.href = URL.createObjectURL(content);
+                link.download = 'instagram_images.zip';
+                document.body.appendChild(link);
+                link.click();
+                document.body.removeChild(link);
+                
+                if (successCount > 0) {
+                    showMessage(`✅ Downloaded ZIP with ${successCount} images and ${failCount} failure notifications.`, 'success');
+                } else {
+                    showMessage(`⚠️ Download completed but no images were accessible due to Instagram's CORS policy. ZIP contains failure notifications with image URLs.`, 'error');
+                }
+            }
+            
+            setDownloading(false);
+        });
+    </script>
+</body>
+</html>
