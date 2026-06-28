@@ -1,0 +1,24 @@
+# Agent / tooling directories — not app code, keep out of the image
+.claude/
+.claude-flow/
+.hive-mind/
+.roo/
+.serena/
+.swarm/
+.mcp.json
+
+# Secrets — injected at runtime via docker-compose `env_file: .env`
+.env
+
+# VCS, build artifacts, runtime data
+.git/
+.gitignore
+Dockerfile
+.dockerignore
+docker-compose.yml
+*.md
+node_modules/
+npm-debug.log*
+jobs.db
+jobs.db-journal
+data/

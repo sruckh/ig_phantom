@@ -1,10 +1,16 @@
 
-# Claude Flow generated files
-.claude/settings.local.json
+# Agent / tooling directories — not app code
+.claude/
+.claude-flow/
+.hive-mind/
+.roo/
+.serena/
+.swarm/
 .mcp.json
 claude-flow.config.json
-.swarm/
-.hive-mind/
+
+# Secrets
+.env
 memory/claude-flow-data.json
 memory/sessions/*
 !memory/sessions/README.md
