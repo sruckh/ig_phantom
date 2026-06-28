@@ -11,6 +11,9 @@ claude-flow.config.json
 
 # Secrets
 .env
+
+# Dependencies — regenerated from package-lock.json via npm install
+node_modules/
 memory/claude-flow-data.json
 memory/sessions/*
 !memory/sessions/README.md
