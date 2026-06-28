@@ -355,7 +355,7 @@ async function startN8NProcessing(jobId, url, sessionCookie) {
             sessionCookie: sessionCookie || '',
             phantomApiKey: process.env.PHANTOMBUSTER_API_KEY,
             agentId: process.env.AGENT_ID,
-            csvName: 'instagram_scrape_results',
+            csvName: `instagram_${jobId.replace(/-/g, '')}`,
             numberOfPostsPerProfile: parseInt(process.env.POSTS_PER_PROFILE) || 100,
             numberOfProfilesPerLaunch: 1,
             callbackUrl: `${callbackUrl}/api/scrape-complete`
