@@ -2,6 +2,7 @@
 # Agent / tooling directories — not app code
 .claude/
 .claude-flow/
+.codegraph/
 .hive-mind/
 .roo/
 .serena/

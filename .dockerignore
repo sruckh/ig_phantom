@@ -1,6 +1,7 @@
 # Agent / tooling directories — not app code, keep out of the image
 .claude/
 .claude-flow/
+.codegraph/
 .hive-mind/
 .roo/
 .serena/
